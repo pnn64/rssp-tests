@@ -122,11 +122,6 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
             continue;
         }
 
-        // --- FILTER: No Edits ---
-        if golden.difficulty.eq_ignore_ascii_case("edit") {
-            continue;
-        }
-
         let match_opt = rssp_charts.iter().find(|c| 
             c.difficulty.eq_ignore_ascii_case(&golden.difficulty) &&
             c.step_type.eq_ignore_ascii_case(&golden.step_type)
