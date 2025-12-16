@@ -1,4 +1,5 @@
 use std::fs;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use rssp; 
 use serde::Deserialize;
@@ -115,35 +116,72 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
     let rssp_charts = rssp::compute_all_hashes(&raw_bytes, extension)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
-    // 6. Compare Charts
+    // 6. Compare Charts (support multiple edits per difficulty)
+    let mut golden_map: HashMap<(String, String), Vec<String>> = HashMap::new();
     for golden in golden_charts {
-        // --- FILTER: Only dance-single ---
         if !golden.step_type.eq_ignore_ascii_case("dance-single") {
             continue;
         }
-
-        let match_opt = rssp_charts.iter().find(|c| 
-            c.difficulty.eq_ignore_ascii_case(&golden.difficulty) &&
-            c.step_type.eq_ignore_ascii_case(&golden.step_type)
+        let key = (
+            golden.step_type.to_ascii_lowercase(),
+            golden.difficulty.to_ascii_lowercase(),
         );
+        golden_map.entry(key).or_default().push(golden.hash);
+    }
 
-        if let Some(chart) = match_opt {
-            if chart.hash != golden.hash {
-                return Err(Failed::from(format!(
-                    "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hash:   {}\nGolden Hash: {}\n",
-                    path.display(),
-                    golden.step_type,
-                    golden.difficulty,
-                    chart.hash,
-                    golden.hash
-                )));
-            }
-        } else {
+    let mut rssp_map: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for chart in rssp_charts {
+        if !chart.step_type.eq_ignore_ascii_case("dance-single") {
+            continue;
+        }
+        let key = (
+            chart.step_type.to_ascii_lowercase(),
+            chart.difficulty.to_ascii_lowercase(),
+        );
+        rssp_map.entry(key).or_default().push(chart.hash);
+    }
+
+    for ((step_type, difficulty), expected_hashes) in golden_map {
+        let Some(actual_hashes) = rssp_map.remove(&(step_type.clone(), difficulty.clone())) else {
             return Err(Failed::from(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
-                golden.step_type,
-                golden.difficulty
+                step_type,
+                difficulty
+            )));
+        };
+
+        // For non-edit charts, only compare the first occurrence to handle duplicates gracefully.
+        if !difficulty.eq_ignore_ascii_case("edit") {
+            let golden_hash = expected_hashes.first().unwrap();
+            let actual_hash = actual_hashes.first().unwrap();
+            if golden_hash != actual_hash {
+                return Err(Failed::from(format!(
+                    "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hash:   {}\nGolden Hash: {}\n",
+                    path.display(),
+                    step_type,
+                    difficulty,
+                    actual_hash,
+                    golden_hash
+                )));
+            }
+            continue;
+        }
+
+        // Edits can legitimately have multiple charts; compare multisets.
+        let mut expected_sorted = expected_hashes.clone();
+        let mut actual_sorted = actual_hashes.clone();
+        expected_sorted.sort();
+        actual_sorted.sort();
+
+        if expected_sorted != actual_sorted {
+            return Err(Failed::from(format!(
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hashes:   {:?}\nGolden Hashes: {:?}\n",
+                path.display(),
+                step_type,
+                difficulty,
+                actual_sorted,
+                expected_sorted
             )));
         }
     }
