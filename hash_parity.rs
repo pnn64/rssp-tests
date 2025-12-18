@@ -21,7 +21,7 @@ fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // Assuming the submodule is mounted at 'tests'
     let packs_dir = manifest_dir.join("tests/packs");
-    let baseline_dir = manifest_dir.join("tests/baseline");
+    let baseline_dir = resolve_baseline_dir(manifest_dir.join("tests/baseline"));
 
     if !packs_dir.exists() {
         println!("No tests/packs directory found.");
@@ -77,6 +77,14 @@ fn main() {
     libtest_mimic::run(&args, tests).exit();
 }
 
+fn resolve_baseline_dir(default_dir: PathBuf) -> PathBuf {
+    let nested = default_dir.join("baseline");
+    if nested.exists() {
+        return nested;
+    }
+    default_dir
+}
+
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), Failed> {
     // 1. Read Compressed Simfile
     let compressed_bytes = fs::read(path)
@@ -98,7 +106,11 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
         .join(format!("{}.json.zst", file_hash));
 
     if !golden_path.exists() {
-        // Return Ok to skip silently if baseline data is missing.
+        println!(
+            "File: {} (no baseline found for hash {})",
+            path.display(),
+            file_hash
+        );
         return Ok(()); 
     }
 
@@ -143,8 +155,17 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
         rssp_map.entry(key).or_default().push(chart.hash);
     }
 
-    for ((step_type, difficulty), expected_hashes) in golden_map {
+    let mut golden_entries: Vec<_> = golden_map.into_iter().collect();
+    golden_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    println!("File: {}", path.display());
+
+    for ((step_type, difficulty), expected_hashes) in golden_entries {
         let Some(actual_hashes) = rssp_map.remove(&(step_type.clone(), difficulty.clone())) else {
+            println!(
+                "  {} {}: baseline present, RSSP missing chart",
+                step_type, difficulty
+            );
             return Err(Failed::from(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -153,22 +174,27 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
             )));
         };
 
-        // For non-edit charts, compare every occurrence in order.
-        if !difficulty.eq_ignore_ascii_case("edit") {
-            if expected_hashes != actual_hashes {
-                return Err(Failed::from(format!(
-                    "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hashes:   {:?}\nGolden Hashes: {:?}\n",
-                    path.display(),
-                    step_type,
-                    difficulty,
-                    actual_hashes,
-                    expected_hashes
-                )));
-            }
-            continue;
+        let count = expected_hashes.len().max(actual_hashes.len());
+        for idx in 0..count {
+            let expected = expected_hashes.get(idx);
+            let actual = actual_hashes.get(idx);
+            let status = if expected.is_some() && expected == actual {
+                "... ok"
+            } else {
+                "... MISMATCH"
+            };
+
+            println!(
+                "  {} {} [{}]: baseline: {} -> rssp: {} {}",
+                step_type,
+                difficulty,
+                idx + 1,
+                expected.map(|s| s.as_str()).unwrap_or("-"),
+                actual.map(|s| s.as_str()).unwrap_or("-"),
+                status
+            );
         }
 
-        // Edits can legitimately have multiple charts; compare sequences as-is.
         if expected_hashes != actual_hashes {
             return Err(Failed::from(format!(
                 "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hashes:   {:?}\nGolden Hashes: {:?}\n",
@@ -179,6 +205,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
                 expected_hashes
             )));
         }
+        continue;
     }
 
     Ok(())
