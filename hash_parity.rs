@@ -119,11 +119,12 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
     // 6. Compare Charts (support multiple edits per difficulty)
     let mut golden_map: HashMap<(String, String), Vec<String>> = HashMap::new();
     for golden in golden_charts {
-        if !golden.step_type.eq_ignore_ascii_case("dance-single") {
+        let step_type_lower = golden.step_type.to_ascii_lowercase();
+        if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
             continue;
         }
         let key = (
-            golden.step_type.to_ascii_lowercase(),
+            step_type_lower,
             golden.difficulty.to_ascii_lowercase(),
         );
         golden_map.entry(key).or_default().push(golden.hash);
@@ -131,11 +132,12 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
 
     let mut rssp_map: HashMap<(String, String), Vec<String>> = HashMap::new();
     for chart in rssp_charts {
-        if !chart.step_type.eq_ignore_ascii_case("dance-single") {
+        let step_type_lower = chart.step_type.to_ascii_lowercase();
+        if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
             continue;
         }
         let key = (
-            chart.step_type.to_ascii_lowercase(),
+            step_type_lower,
             chart.difficulty.to_ascii_lowercase(),
         );
         rssp_map.entry(key).or_default().push(chart.hash);
@@ -151,37 +153,30 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
             )));
         };
 
-        // For non-edit charts, only compare the first occurrence to handle duplicates gracefully.
+        // For non-edit charts, compare every occurrence in order.
         if !difficulty.eq_ignore_ascii_case("edit") {
-            let golden_hash = expected_hashes.first().unwrap();
-            let actual_hash = actual_hashes.first().unwrap();
-            if golden_hash != actual_hash {
+            if expected_hashes != actual_hashes {
                 return Err(Failed::from(format!(
-                    "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hash:   {}\nGolden Hash: {}\n",
+                    "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hashes:   {:?}\nGolden Hashes: {:?}\n",
                     path.display(),
                     step_type,
                     difficulty,
-                    actual_hash,
-                    golden_hash
+                    actual_hashes,
+                    expected_hashes
                 )));
             }
             continue;
         }
 
-        // Edits can legitimately have multiple charts; compare multisets.
-        let mut expected_sorted = expected_hashes.clone();
-        let mut actual_sorted = actual_hashes.clone();
-        expected_sorted.sort();
-        actual_sorted.sort();
-
-        if expected_sorted != actual_sorted {
+        // Edits can legitimately have multiple charts; compare sequences as-is.
+        if expected_hashes != actual_hashes {
             return Err(Failed::from(format!(
                 "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hashes:   {:?}\nGolden Hashes: {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
-                actual_sorted,
-                expected_sorted
+                actual_hashes,
+                expected_hashes
             )));
         }
     }
