@@ -1,10 +1,10 @@
 use std::fs;
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use rssp; 
 use serde::Deserialize;
 use walkdir::WalkDir;
-use libtest_mimic::{Arguments, Trial, Failed};
+use libtest_mimic::Arguments;
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -61,20 +61,123 @@ fn main() {
             .to_string_lossy()
             .to_string();
 
-        let path_clone = path.to_path_buf();
-        let baseline_dir_clone = baseline_dir.clone();
-        let extension_clone = inner_extension.clone();
-
-        // 3. Create a Trial
-        let trial = Trial::test(test_name, move || {
-            check_file(&path_clone, &extension_clone, &baseline_dir_clone)
+        tests.push(TestCase {
+            name: test_name,
+            path: path.to_path_buf(),
+            extension: inner_extension,
         });
-
-        tests.push(trial);
     }
 
-    // 4. Run tests
-    libtest_mimic::run(&args, tests).exit();
+    // Keep test discovery order stable (WalkDir / filesystem order is not guaranteed).
+    tests.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Apply CLI filters (compatible with libtest / libtest-mimic).
+    let mut tests: Vec<_> = tests
+        .into_iter()
+        .filter(|t| match &args.filter {
+            None => true,
+            Some(filter) => {
+                if args.exact {
+                    &t.name == filter
+                } else {
+                    t.name.contains(filter)
+                }
+            }
+        })
+        .filter(|t| args.skip.iter().all(|skip| !t.name.contains(skip)))
+        .collect();
+
+    if args.ignored {
+        // We don't define any ignored tests; this matches libtest semantics.
+        tests.clear();
+    }
+
+    if args.list {
+        for t in &tests {
+            println!("{}", t.name);
+        }
+        return;
+    }
+
+    // 4. Run tests (serially; one simfile must fully validate before the next starts).
+    println!("running {} tests", tests.len());
+
+    let mut num_passed = 0u64;
+    let mut num_failed = 0u64;
+    let mut failures: Vec<Failure> = Vec::new();
+
+    for test in tests {
+        let TestCase {
+            name,
+            path,
+            extension,
+        } = test;
+
+        let res = check_file(&path, &extension, &baseline_dir);
+        match res {
+            Ok(()) => {
+                println!("test {} ... ok", name);
+                num_passed += 1;
+            }
+            Err(msg) => {
+                println!("test {} ... FAILED", name);
+                failures.push(Failure {
+                    name,
+                    message: msg.trim().to_string(),
+                });
+                num_failed += 1;
+            }
+        }
+
+        // Make CI logs stream predictably.
+        let _ = io::stdout().flush();
+    }
+
+    println!();
+    if !failures.is_empty() {
+        println!("failures:");
+        for failure in &failures {
+            println!("    {}", failure.name);
+        }
+
+        for failure in &failures {
+            println!();
+            println!("---- {} ----", failure.name);
+            if !failure.message.is_empty() {
+                println!("{}", failure.message);
+            }
+            println!();
+            println!(
+                "rerun: cargo test --test hash_parity -- --exact {:?}",
+                failure.name
+            );
+        }
+        println!();
+    }
+
+    if num_failed == 0 {
+        println!("test result: ok. {} passed; 0 failed", num_passed);
+        return;
+    }
+
+    println!(
+        "test result: FAILED. {} passed; {} failed",
+        num_passed, num_failed
+    );
+    std::process::exit(101);
+}
+
+#[derive(Debug, Clone)]
+struct TestCase {
+    name: String,
+    path: PathBuf,
+    extension: String,
+}
+
+#[derive(Debug, Clone)]
+struct Failure {
+    name: String,
+    message: String,
 }
 
 fn resolve_baseline_dir(default_dir: PathBuf) -> PathBuf {
@@ -85,7 +188,7 @@ fn resolve_baseline_dir(default_dir: PathBuf) -> PathBuf {
     default_dir
 }
 
-fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), Failed> {
+fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
     // 1. Read Compressed Simfile
     let compressed_bytes = fs::read(path)
         .map_err(|e| format!("Failed to read file: {}", e))?;
@@ -106,12 +209,12 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
         .join(format!("{}.json.zst", file_hash));
 
     if !golden_path.exists() {
-        println!(
-            "File: {} (no baseline found for hash {})",
+        return Err(format!(
+            "\n\nMISSING BASELINE\nFile: {}\nHash: {}\nExpected baseline: {}\n",
             path.display(),
-            file_hash
-        );
-        return Ok(()); 
+            file_hash,
+            golden_path.display()
+        ));
     }
 
     // 4. Read & Decompress Golden JSON
@@ -166,12 +269,12 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
                 "  {} {}: baseline present, RSSP missing chart",
                 step_type, difficulty
             );
-            return Err(Failed::from(format!(
+            return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
                 step_type,
                 difficulty
-            )));
+            ));
         };
 
         let count = expected_hashes.len().max(actual_hashes.len());
@@ -179,9 +282,9 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
             let expected = expected_hashes.get(idx);
             let actual = actual_hashes.get(idx);
             let status = if expected.is_some() && expected == actual {
-                "... ok"
+                "....ok"
             } else {
-                "... MISMATCH"
+                "....MISMATCH"
             };
 
             println!(
@@ -196,14 +299,14 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), F
         }
 
         if expected_hashes != actual_hashes {
-            return Err(Failed::from(format!(
+            return Err(format!(
                 "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hashes:   {:?}\nGolden Hashes: {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
                 actual_hashes,
                 expected_hashes
-            )));
+            ));
         }
         continue;
     }
