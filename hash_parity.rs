@@ -12,6 +12,8 @@ struct GoldenChart {
     #[serde(rename = "steps_type")]
     step_type: String,
     hash: String,
+    #[serde(default)]
+    meter: Option<u32>,
 }
 
 fn main() {
@@ -232,7 +234,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     // 6. Compare Charts (support multiple edits per difficulty)
-    let mut golden_map: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut golden_map: HashMap<(String, String), Vec<(String, Option<u32>)>> = HashMap::new();
     for golden in golden_charts {
         let step_type_lower = golden.step_type.to_ascii_lowercase();
         if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
@@ -242,7 +244,10 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             step_type_lower,
             golden.difficulty.to_ascii_lowercase(),
         );
-        golden_map.entry(key).or_default().push(golden.hash);
+        golden_map
+            .entry(key)
+            .or_default()
+            .push((golden.hash, golden.meter));
     }
 
     let mut rssp_map: HashMap<(String, String), Vec<String>> = HashMap::new();
@@ -263,7 +268,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     println!("File: {}", path.display());
 
-    for ((step_type, difficulty), expected_hashes) in golden_entries {
+    for ((step_type, difficulty), expected_entries) in golden_entries {
         let Some(actual_hashes) = rssp_map.remove(&(step_type.clone(), difficulty.clone())) else {
             println!(
                 "  {} {}: baseline present, RSSP missing chart",
@@ -277,10 +282,15 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             ));
         };
 
-        let count = expected_hashes.len().max(actual_hashes.len());
+        let count = expected_entries.len().max(actual_hashes.len());
         for idx in 0..count {
-            let expected = expected_hashes.get(idx);
-            let actual = actual_hashes.get(idx);
+            let expected = expected_entries.get(idx).map(|(hash, _)| hash.as_str());
+            let actual = actual_hashes.get(idx).map(|s| s.as_str());
+            let meter_label = expected_entries
+                .get(idx)
+                .and_then(|(_, meter)| *meter)
+                .map(|meter| meter.to_string())
+                .unwrap_or_else(|| (idx + 1).to_string());
             let status = if expected.is_some() && expected == actual {
                 "....ok"
             } else {
@@ -291,14 +301,23 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 "  {} {} [{}]: baseline: {} -> rssp: {} {}",
                 step_type,
                 difficulty,
-                idx + 1,
-                expected.map(|s| s.as_str()).unwrap_or("-"),
-                actual.map(|s| s.as_str()).unwrap_or("-"),
+                meter_label,
+                expected.unwrap_or("-"),
+                actual.unwrap_or("-"),
                 status
             );
         }
 
-        if expected_hashes != actual_hashes {
+        let matches = expected_entries.len() == actual_hashes.len()
+            && expected_entries
+                .iter()
+                .zip(&actual_hashes)
+                .all(|((expected_hash, _), actual_hash)| expected_hash == actual_hash);
+        if !matches {
+            let expected_hashes: Vec<String> = expected_entries
+                .iter()
+                .map(|(hash, _)| hash.clone())
+                .collect();
             return Err(format!(
                 "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP Hashes:   {:?}\nGolden Hashes: {:?}\n",
                 path.display(),
