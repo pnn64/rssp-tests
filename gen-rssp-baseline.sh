@@ -21,8 +21,8 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # Resolve RSSP_BIN:
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "$RSSP_BIN" != */* ]]; then
-  if [[ -x "$SCRIPT_DIR/target/release/$RSSP_BIN" ]]; then
-    RSSP_BIN="$SCRIPT_DIR/target/release/$RSSP_BIN"
+  if [[ -x "$SCRIPT_DIR/$RSSP_BIN" ]]; then
+    RSSP_BIN="$SCRIPT_DIR/$RSSP_BIN"
   else
     RSSP_BIN="$(command -v "$RSSP_BIN" || true)"
   fi
@@ -31,7 +31,7 @@ fi
 # --- sanity checks ---
 command -v zstd   >/dev/null 2>&1 || die "zstd not found in PATH"
 command -v md5sum >/dev/null 2>&1 || die "md5sum not found in PATH"
-[[ -n "$RSSP_BIN" && -x "$RSSP_BIN" ]] || die "rssp not found/executable. Set RSSP_BIN or ensure it’s in PATH."
+[[ -n "$RSSP_BIN" && -x "$RSSP_BIN" ]] || die "rssp not found/executable. Set RSSP_BIN or place it next to this script."
 
 # Temp workspace for decompressing *.zst inputs
 TMPDIR="$(mktemp -d)"
@@ -48,11 +48,11 @@ while IFS= read -r -d '' f; do
 
   # If compressed, decompress to a temp file (keeping .sm/.ssc at the end)
   if [[ "$f" == *.zst ]]; then
-    base="$(basename "${f%.zst}")"          # e.g. "Song.sm"
-    ext="${base##*.}"                       # sm or ssc
+    base="$(basename "${f%.zst}")"
+    ext="${base##*.}"                           # sm or ssc
 
     tmpbase="$(mktemp -p "$TMPDIR" "rssp.XXXXXX")"
-    tmpfile="${tmpbase}.${ext}"             # .../rssp.ABC123.sm (or .ssc)
+    tmpfile="${tmpbase}.${ext}"
     mv -- "$tmpbase" "$tmpfile"
 
     if ! zstd -q -dc -- "$f" >"$tmpfile"; then
