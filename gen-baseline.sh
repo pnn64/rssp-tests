@@ -20,6 +20,9 @@ fi
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 # Resolve the harness path:
+# - If HARNESS_BIN contains '/', treat it as a path.
+# - Else, prefer a binary next to this script.
+# - Else, fall back to PATH.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "$HARNESS_BIN" != */* ]]; then
   if [[ -x "$SCRIPT_DIR/$HARNESS_BIN" ]]; then
