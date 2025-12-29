@@ -13,12 +13,12 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 command -v zstd >/dev/null 2>&1 || die "zstd not found in PATH"
 [[ -d "$PACKS_DIR" ]] || die "PACKS_DIR not found or not a directory: $PACKS_DIR"
 
-# 1) Delete everything except: .sm, .ssc, .dwi, and their .zst variants
-echo "Cleaning: deleting files not matching {*.sm, *.ssc, *.dwi, *.sm.zst, *.ssc.zst, *.dwi.zst}"
+# 1) Delete everything except: .sm, .ssc, and their .zst variants
+echo "Cleaning: deleting files not matching {*.sm, *.ssc, *.sm.zst, *.ssc.zst}"
 
 # Note: keep the list explicit to avoid subtle suffix mistakes.
 find "$PACKS_DIR" -type f \
-  ! \( -name '*.sm' -o -name '*.ssc' -o -name '*.dwi' -o -name '*.sm.zst' -o -name '*.ssc.zst' -o -name '*.dwi.zst' \) \
+  ! \( -name '*.sm' -o -name '*.ssc' -o -name '*.sm.zst' -o -name '*.ssc.zst' \) \
   -print0 |
 while IFS= read -r -d '' f; do
   echo "del : $f"
@@ -26,9 +26,9 @@ while IFS= read -r -d '' f; do
 done
 
 # 2) Compress plain simfiles to .zst (level N), then delete the original
-echo "Compressing: *.sm/*.ssc/*.dwi -> *.zst (level $ZSTD_LEVEL)"
+echo "Compressing: *.sm/*.ssc -> *.zst (level $ZSTD_LEVEL)"
 
-find "$PACKS_DIR" -type f \( -name '*.sm' -o -name '*.ssc' -o -name '*.dwi' \) -print0 |
+find "$PACKS_DIR" -type f \( -name '*.sm' -o -name '*.ssc' \) -print0 |
 while IFS= read -r -d '' f; do
   out="$f.zst"
 
